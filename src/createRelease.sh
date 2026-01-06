@@ -21,9 +21,9 @@ find plugin.video.icdrama -type f -print | grep -v ".git" | zip -@ ../plugin.vid
 
 # Update Release index.html and MD5 hash
 pushd ../plugin.video.icdrama/
-  ../src/kodidirlist.py > index.html
+python3 ../src/kodidirlist.py > index.html
 popd
 
-md5 -q ../addons.xml > ../addons.xml.md5
+md5sum ../addons.xml > ../addons.xml.md5
 
 
