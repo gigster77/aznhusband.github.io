@@ -1,5 +1,4 @@
 import json
-import requests
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
@@ -18,83 +17,97 @@ class HdPlay(ResolveUrl):
 
     def __init__(self):
         self.net = common.Net()
-        self.headers = {
+        self.base_headers = {
             'User-Agent': common.RAND_UA,
-            'Referer': 'https://hdplay.se/'
+            'Accept': '*/*',
         }
 
     def get_url(self, host, media_id):
         return f'https://{host}/{media_id}'
 
     def get_media_url(self, host, media_id):
-        url = self.get_url(host, media_id)
+        page_url = self.get_url(host, media_id)
 
-        response = requests.get(url, headers=self.headers, timeout=10)
-        if response.status_code != 200:
-            raise ResolverError(f'HDPlay HTTP error: {response.status_code}')
+        headers = self.base_headers.copy()
+        headers['Referer'] = f'https://{host}/'
+        headers['Origin'] = f'https://{host}'
 
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # -------------------------------------------------
+        # 1️⃣ Load embed page (with cookies)
+        # -------------------------------------------------
+        r = self.net.http_GET(page_url, headers=headers).content
+        soup = BeautifulSoup(r, 'html.parser')
 
-        # ---------------------------------------------------------
-        # 1️⃣ Try iframe embeds first (most common now)
-        # ---------------------------------------------------------
-        iframe = soup.find('iframe')
-        if iframe and iframe.get('src'):
-            iframe_url = urljoin(url, iframe['src'])
-            xbmc.log(f'HDPlay iframe found: {iframe_url}', xbmc.LOGDEBUG)
-            return iframe_url + helpers.append_headers(self.headers)
+        # -------------------------------------------------
+        # 2️⃣ Extract API endpoint from JS
+        # -------------------------------------------------
+        api_url = None
 
-        # ---------------------------------------------------------
-        # 2️⃣ Look for JS objects containing video URLs
-        # ---------------------------------------------------------
         for script in soup.find_all('script'):
-            if not script.string:
+            text = script.string
+            if not text:
                 continue
 
-            text = script.string.strip()
+            if '/api/source/' in text:
+                start = text.find('/api/source/')
+                end = text.find('"', start)
+                api_url = text[start:end]
+                break
 
-            # Look for JSON-style objects
-            if 'video' in text or 'sources' in text:
-                try:
-                    # Extract JSON-like payload safely
-                    start = text.find('{')
-                    end = text.rfind('}') + 1
-                    if start == -1 or end == -1:
-                        continue
+        # -------------------------------------------------
+        # 3️⃣ Fallback: iframe → recursive resolve
+        # -------------------------------------------------
+        if not api_url:
+            iframe = soup.find('iframe')
+            if iframe and iframe.get('src'):
+                iframe_url = urljoin(page_url, iframe['src'])
+                xbmc.log(f'HDPlay fallback iframe: {iframe_url}', xbmc.LOGDEBUG)
+                return common.resolve(iframe_url)
 
-                    payload = text[start:end]
-                    data = json.loads(payload)
+            raise ResolverError('HDPlay: No API or iframe found')
 
-                    # Common patterns
-                    if isinstance(data, dict):
-                        if 'video_url' in data:
-                            return self._build_url(host, data['video_url'])
+        api_url = urljoin(page_url, api_url)
+        xbmc.log(f'HDPlay API: {api_url}', xbmc.LOGDEBUG)
 
-                        if 'sources' in data and isinstance(data['sources'], list):
-                            for src in data['sources']:
-                                if 'file' in src:
-                                    return self._build_url(host, src['file'])
+        # -------------------------------------------------
+        # 4️⃣ Call API
+        # -------------------------------------------------
+        api_headers = headers.copy()
+        api_headers['Referer'] = page_url
 
-                except Exception:
-                    continue
+        r = self.net.http_GET(api_url, headers=api_headers).content
 
-        # ---------------------------------------------------------
-        # 3️⃣ Look for <video><source> tags
-        # ---------------------------------------------------------
-        video = soup.find('video')
-        if video:
-            source = video.find('source')
-            if source and source.get('src'):
-                return self._build_url(host, source['src'])
+        try:
+            data = json.loads(r)
+        except Exception:
+            raise ResolverError('HDPlay: Invalid API response')
 
-        xbmc.log('HDPlay: No playable media found', xbmc.LOGERROR)
-        raise ResolverError('Unable to resolve HDPlay media URL')
+        sources = data.get('data') or []
+        if not sources:
+            raise ResolverError('HDPlay: No sources returned')
 
-    def _build_url(self, host, src):
-        if not src.startswith('http'):
-            src = urljoin(f'https://{host}', src)
-        return src + helpers.append_headers(self.headers)
+        # -------------------------------------------------
+        # 5️⃣ Pick best quality (HLS preferred)
+        # -------------------------------------------------
+        def score(src):
+            file = src.get('file', '')
+            label = src.get('label', '')
+            return (
+                2 if file.endswith('.m3u8') else 1,
+                int(''.join(filter(str.isdigit, label)) or 0)
+            )
+
+        sources.sort(key=score, reverse=True)
+
+        for src in sources:
+            file_url = src.get('file')
+            if file_url and file_url.startswith('http'):
+                xbmc.log(f'HDPlay stream selected: {file_url}', xbmc.LOGDEBUG)
+                return file_url + helpers.append_headers(api_headers)
+
+        raise ResolverError('HDPlay: No playable stream found')
 
     @classmethod
     def _is_enabled(cls):
         return True
+
