@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 from resolveurl.resolver import ResolverError
 from resolveurl.lib.net import get_ua
 from lib import config, common, scrapers, store, cleanstring, cache, auto_select
+from lib.sources.rss import RssSource
 
 actions = []
 def _action(func):
@@ -65,6 +66,39 @@ def recent_updates(url):
     for name, update_url in scrapers.recent_updates(url):
         action_url = common.action_url('mirrors', url=update_url)
         di_list.append(common.diritem(name, action_url))
+    return di_list
+
+@_dir_action
+def rss(url):
+    """
+    Build directory from RSS feed
+    """
+    rss_source = RssSource()
+
+    items = rss_source.parse(
+        url,
+        domains=['hdplay.se', 'drive.adramas.se']
+    )
+
+    if not items:
+        common.notify(
+            heading="RSS",
+            message="No playable items found"
+        )
+        return []
+
+    di_list = []
+    for item in items:
+        action_url = common.action_url('play_mirror', url=item['link'])
+        di_list.append(
+            common.diritem(
+                item['title'],
+                action_url,
+                isfolder=False,
+                isplayable=True
+            )
+        )
+
     return di_list
 
 @_dir_action

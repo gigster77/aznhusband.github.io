@@ -10,9 +10,11 @@ store_file = os.path.join(profile_dir, 'store.pickle')
 # the trailing forward slashes are necessary
 # without it, page urls will be wrong (icdrama bug)
 search_url = urljoin(base_url, '/search/%s/')
+rss_feed_url = 'https://allrss.se/dramas'
 index_items = [
     diritem(33011, action_url('saved_list')),
     diritem(33000, action_url('recent_updates', url=urljoin(base_url, '/recently-updated/'))),
+    diritem(33019, action_url('rss', url=rss_feed_url)),
     diritem(33001, action_url('shows', url=urljoin(base_url, '/hk-drama/'))),
     diritem(33002, action_url('shows', url=urljoin(base_url, '/hk-movie/'))),
     diritem(33003, action_url('shows', url=urljoin(base_url, '/hk-show/'))),
